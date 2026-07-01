@@ -1,0 +1,7 @@
+id,customer,total,status,items,created_at
+1,Alice,120.50,paid,3,2026-01-02T10:00:00Z
+2,Bob,80.00,pending,1,2026-01-02T11:30:00Z
+3,Alice,42.25,paid,2,2026-01-03T09:15:00Z
+4,Carol,300.00,paid,5,2026-01-04T14:00:00Z
+5,Bob,15.75,refunded,1,2026-01-05T08:45:00Z
+6,Dave,55.00,paid,2,2026-01-06T12:00:00Z

@@ -1,0 +1,33 @@
+name: erc20-indexer
+
+source:
+  type: evm
+  rpc: ${RPC_URL}                 # e.g. an Alchemy/Infura/QuickNode HTTPS endpoint
+  confirmations: 12               # wait N blocks behind head before indexing (reorg safety)
+  blockBatchSize: 2000            # max block span per eth_getLogs call
+  reorgWindow: 128                # how deep a reorg we can still roll back
+  contracts:
+    - address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"   # USDC (example)
+      abi: ./erc20.abi.json
+      events: [Transfer]
+      startBlock: 18000000
+
+target:
+  type: sqlite
+  path: ./erc20.db
+
+handlers: ./handlers.js
+
+schema:
+  Transfer:
+    id: ID                        # txHash-logIndex
+    from: String
+    to: String
+    value: BigInt
+    blockNumber: Int
+    txHash: String
+  Holder:
+    id: ID                        # address
+    address: String
+    balance: BigInt
+    transferCount: Int

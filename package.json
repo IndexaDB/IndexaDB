@@ -1,0 +1,23 @@
+{
+  "name": "indexa",
+  "version": "0.1.0",
+  "description": "Declarative database indexer framework — khai báo, không cần tự code engine.",
+  "type": "module",
+  "bin": {
+    "indexa": "./bin/indexa.js"
+  },
+  "scripts": {
+    "demo": "node bin/indexa.js deploy --config examples/orders/indexa.config.yaml",
+    "test": "node test/reorg.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "optionalDependencies": {
+    "pg": "^8.11.0",
+    "ethers": "^6.17.0"
+  }
+}

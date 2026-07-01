@@ -1,0 +1,5 @@
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+indexa-types.d.ts

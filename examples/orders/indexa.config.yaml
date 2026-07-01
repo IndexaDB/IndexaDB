@@ -1,0 +1,21 @@
+name: orders-indexer
+
+source:
+  type: csv
+  sources:
+    - { key: orders, file: data/orders.csv }
+
+target:
+  type: sqlite
+  path: ./orders.db
+
+# No handlers block -> Indexa auto-maps CSV columns to the Order entity.
+
+schema:
+  Order:
+    id: ID
+    customer: String
+    total: BigDecimal
+    status: String
+    items: Int
+    created_at: Timestamp

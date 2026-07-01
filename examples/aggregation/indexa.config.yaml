@@ -1,0 +1,24 @@
+name: customer-stats
+
+source:
+  type: csv
+  sources:
+    - { key: orders, file: data/orders.csv }
+
+target:
+  type: sqlite
+  path: ./stats.db
+
+handlers: ./handlers.js
+
+schema:
+  Order:
+    id: ID
+    customer: String
+    total: BigDecimal
+    status: String
+  Customer:
+    id: ID
+    name: String
+    totalSpent: Float
+    orderCount: Int
