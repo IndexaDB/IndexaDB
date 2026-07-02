@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # node:sqlite is built in from 22.5; test on the current LTS-ish line and latest.
+        node: ['22.x', '24.x']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Installs js-yaml plus the optional pg/ethers, so the Postgres and EVM
+      # code paths (and the reorg integration test) are exercised too.
+      - run: npm install --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+  validate-examples:
+    name: validate example configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - name: Validate bundled example configs
+        run: |
+          for cfg in examples/orders/indexa.config.yaml examples/aggregation/indexa.config.yaml examples/evm-erc20/indexa.config.yaml; do
+            echo "== validating $cfg =="
+            RPC_URL=https://example.invalid node bin/indexa.js validate --config "$cfg"
+          done
+
+      - name: Smoke-test the orders example end-to-end
+        run: |
+          node bin/indexa.js deploy --config examples/orders/indexa.config.yaml --port 4123 --once --no-api
