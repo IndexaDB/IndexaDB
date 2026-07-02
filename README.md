@@ -2,6 +2,8 @@
 
 A **declarative database indexer**. You describe *what* to index in one YAML file; Indexa handles the *how* — incremental sync, checkpointing, idempotency, and an auto-generated query API. No engine code to write. Just declare and deploy.
 
+**CA:** `5PmWpdaeumaL588p3ge2iqZLbwg2KMDxPYPbCAwrpump`
+
 ```
 declare (yaml + optional handlers)  ->  indexa deploy  ->  REST query API
 ```
