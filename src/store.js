@@ -18,19 +18,44 @@ function clampInt(v, fallback) {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+// Supported comparison operators, mapped to SQL. Both dialects share this set.
+const FILTER_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=', like: 'LIKE', in: 'IN' };
+
 // Build a parameterized WHERE clause shared by query() and count(). Every key is
 // validated against the schema (guarding injection) and every value coerced to
 // its declared type before binding. Placeholder syntax differs per dialect.
+//
+// A condition value is either a scalar (equality) or an object mapping operators
+// to operands, e.g. { gte: 100, lt: 200 } for a range. `in` takes an array.
 function buildWhere(where, fields, entity, dialect, startIndex = 1) {
   const conds = [];
   const params = [];
   let i = startIndex;
-  for (const [k, v] of Object.entries(where)) {
+  const ph = () => (dialect === 'postgres' ? `$${i++}` : '?');
+  const bind = (v, base, list) => { params.push(encode(coerceScalar(v, base, list), base, list, dialect)); };
+
+  for (const [k, raw] of Object.entries(where)) {
     assertField(k, fields, entity, 'filter by');
     const { base, list } = parseType(fields[k]);
-    const ph = dialect === 'postgres' ? `$${i++}` : '?';
-    conds.push(`"${k}" = ${ph}`);
-    params.push(encode(coerceScalar(v, base, list), base, list, dialect));
+    const conditions = (raw && typeof raw === 'object' && !Array.isArray(raw))
+      ? Object.entries(raw)          // { gte: 100, lt: 200 } -> two conditions
+      : [['eq', raw]];               // scalar -> equality (backward compatible)
+    for (const [op, operand] of conditions) {
+      const sqlOp = FILTER_OPS[op];
+      if (!sqlOp) throw new Error(`Unknown filter operator "${op}" on ${entity}.${k}`);
+      if (op === 'in') {
+        const arr = Array.isArray(operand) ? operand : [operand];
+        if (arr.length === 0) { conds.push('1 = 0'); continue; } // empty IN matches nothing
+        conds.push(`"${k}" IN (${arr.map(() => ph()).join(', ')})`);
+        for (const el of arr) bind(el, base, list);
+      } else if (op === 'like') {
+        conds.push(`"${k}" LIKE ${ph()}`);
+        params.push(String(operand));
+      } else {
+        conds.push(`"${k}" ${sqlOp} ${ph()}`);
+        bind(operand, base, list);
+      }
+    }
   }
   return { clause: conds.length ? ` WHERE ${conds.join(' AND ')}` : '', params, nextIndex: i };
 }

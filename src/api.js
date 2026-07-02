@@ -2,6 +2,37 @@
 import http from 'node:http';
 
 const RESERVED = new Set(['limit', 'offset', 'orderBy', 'desc']);
+// Query-string operator suffixes: ?total_gte=100&status_in=paid,pending
+const FILTER_OPS = new Set(['gt', 'gte', 'lt', 'lte', 'ne', 'in', 'like']);
+
+// Turn flat query params into a store `where` object, supporting operator
+// suffixes (field_gte) and comma lists for `in`. Exact field names win over the
+// suffix parse, so a field literally named foo_in stays an equality filter.
+function parseWhere(searchParams, schemaFields) {
+  const where = {};
+  const add = (field, op, value) => {
+    if (op === 'eq' && where[field] === undefined) { where[field] = value; return; }
+    if (where[field] === undefined || typeof where[field] !== 'object' || Array.isArray(where[field])) {
+      const prev = where[field];
+      where[field] = {};
+      if (prev !== undefined) where[field].eq = prev;
+    }
+    where[field][op] = value;
+  };
+  for (const [k, v] of searchParams.entries()) {
+    if (RESERVED.has(k)) continue;
+    if (k in schemaFields) { add(k, 'eq', v); continue; }
+    const idx = k.lastIndexOf('_');
+    if (idx > 0) {
+      const field = k.slice(0, idx);
+      const op = k.slice(idx + 1);
+      if (FILTER_OPS.has(op) && field in schemaFields) {
+        add(field, op, op === 'in' ? v.split(',') : v);
+      }
+    }
+  }
+  return where;
+}
 
 function send(res, code, body, headers) {
   const json = JSON.stringify(body, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
@@ -84,10 +115,7 @@ export function createApi(store, cfg, { logger } = {}) {
       }
 
       // GET /<entity> — filtered list with pagination
-      const where = {};
-      for (const [k, v] of url.searchParams.entries()) {
-        if (!RESERVED.has(k) && k in cfg.schema[entity]) where[k] = v;
-      }
+      const where = parseWhere(url.searchParams, cfg.schema[entity]);
       const orderBy = url.searchParams.get('orderBy') || undefined;
       if (orderBy && !(orderBy in cfg.schema[entity])) {
         return reply(400, { error: `Cannot orderBy "${orderBy}": not a field of ${entity}` });
