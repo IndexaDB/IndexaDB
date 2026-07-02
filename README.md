@@ -25,7 +25,7 @@ The CSV example runs end-to-end with the auto-generated REST API — a live HTTP
 ## Install
 
 ```bash
-npm install        # installs js-yaml (pg is optional, only for Postgres)
+npm install        # js-yaml; pg (Postgres) and ethers (EVM) are optional extras
 npm link           # optional: makes the `indexa` command global
 ```
 
@@ -110,11 +110,44 @@ From your schema, every entity becomes a REST resource — no code:
 | Endpoint | Description |
 |---|---|
 | `GET /` | App metadata + full schema |
-| `GET /<entity>` | List with filtering |
+| `GET /<entity>` | List with filtering + pagination |
 | `GET /<entity>/:id` | Fetch one |
-| `GET /_health` | Health check |
+| `GET /_health` | Health check (uptime + per-stream checkpoints) |
 
-Query params: any schema field (`?status=paid&customer=Bob`), plus `limit`, `offset`, `orderBy`, `desc=true`.
+### Filtering
+
+Any schema field is a filter. Values are coerced to the field's declared type, so
+`?active=true` matches a Boolean and `?items=3` an Int — no manual casting. Add an
+operator suffix for anything beyond equality:
+
+| Suffix | Meaning | Example |
+|---|---|---|
+| *(none)* | equals | `?status=paid` |
+| `_ne` | not equal | `?status_ne=refunded` |
+| `_gt` `_gte` `_lt` `_lte` | range | `?total_gte=100&total_lt=500` |
+| `_in` | one of (comma list) | `?status_in=paid,pending` |
+| `_like` | SQL `LIKE` pattern | `?customer_like=Al%` |
+
+`Timestamp` fields sort and range correctly (`?created_at_gte=2026-01-03&created_at_lt=2026-01-05`)
+because ISO-8601 is lexicographically ordered.
+
+### Pagination & ordering
+
+`limit` (default 100, max 1000), `offset`, `orderBy=<field>`, `desc=true`. List responses
+return `{ data, count, total, limit, offset }` — `count` is the page size, `total` is the
+full match count for building pagers. `orderBy` only accepts real schema fields.
+
+### CORS
+
+The read-only query API sends permissive CORS headers by default (and answers `OPTIONS`
+preflight). Restrict or disable via config:
+
+```yaml
+api:
+  cors: false                 # no CORS headers
+  # cors: true                # Access-Control-Allow-Origin: * (default)
+  # cors: "https://app.example.com"
+```
 
 ## CLI
 
@@ -208,3 +241,24 @@ running balances* — and then re-indexes the new canonical chain. See
 - **WebSocket/Firehose ingestion** — the `evm` connector polls; a push-based transport (Substreams/Firehose) can be added as a connector for higher throughput.
 
 These are deliberately left out to keep the core small and the "just deploy" promise intact.
+
+## Testing
+
+```bash
+npm test           # runs the full node:test suite (node --test)
+```
+
+The suite covers schema/type coercion, config validation, the CSV parser, the store
+(filters, comparison operators, pagination, the injection guard, journal rollback), the
+REST API over a live server, and the engine's checkpointing/idempotency. The EVM reorg
+proof (`test/reorg.test.mjs`) runs when the optional `ethers` package is installed and
+skips cleanly otherwise. CI runs everything on Node 22 and 24.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: `npm install`, `npm test`, keep the core
+dependency-light, and add a test alongside any behaviour change.
+
+## License
+
+[MIT](LICENSE) © IndexaDB
