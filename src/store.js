@@ -95,7 +95,11 @@ class SqliteStore {
     const { DatabaseSync } = await import('node:sqlite');
     this.schema = schema;
     this.db = new DatabaseSync(this.cfg.path || './indexa.db');
-    this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec('PRAGMA journal_mode = WAL;');   // concurrent readers alongside the writer
+    this.db.exec('PRAGMA busy_timeout = 5000;');  // wait on a locked db instead of erroring immediately
+    // NORMAL is durable against app crashes and safe here because entity writes and
+    // the checkpoint advance commit together — a lost tail transaction just re-indexes.
+    this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec(`CREATE TABLE IF NOT EXISTS _indexa_checkpoints (
       source TEXT PRIMARY KEY, cursor TEXT, updated_at TEXT)`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS _indexa_meta (k TEXT PRIMARY KEY, v TEXT)`);

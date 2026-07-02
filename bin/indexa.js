@@ -35,6 +35,7 @@ Usage:
 
 Env:
   INDEXA_LOG_LEVEL=debug|info|warn|error
+  INDEXA_LOG_FORMAT=text|json      json for structured/aggregated logs
 `;
 
 async function cmdDeploy(args) {

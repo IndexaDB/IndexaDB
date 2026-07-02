@@ -211,7 +211,9 @@ docker build -t my-indexer .
 docker run -p 4000:4000 -e CONFIG=app/indexa.config.yaml my-indexer
 ```
 
-The image has a healthcheck on `/_health` and respects `INDEXA_LOG_LEVEL`.
+The image has a healthcheck on `/_health` and respects `INDEXA_LOG_LEVEL`
+(`debug|info|warn|error`) and `INDEXA_LOG_FORMAT` (`text|json` — set `json` for
+structured logs that ship cleanly into a log aggregator).
 
 ## How it works
 

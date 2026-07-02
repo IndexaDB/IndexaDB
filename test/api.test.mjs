@@ -107,3 +107,21 @@ test('plural/singular + case-insensitive entity resolution', async () => {
   assert.equal((await get('/Order')).status, 200);
   assert.equal((await get('/ORDERS')).status, 200);
 });
+
+test('internal errors return a generic 500 without leaking details', async () => {
+  const boom = {
+    async query() { throw new Error('SECRET: connection string postgres://user:pw@host/db'); },
+    async count() { return 0; },
+    async get() { throw new Error('SECRET internal'); },
+    async allCheckpoints() { return []; },
+  };
+  const srv = createApi(boom, cfg); // no logger -> silent
+  await new Promise((r) => srv.listen(0, r));
+  const b = `http://localhost:${srv.address().port}`;
+  const res = await fetch(`${b}/orders`);
+  assert.equal(res.status, 500);
+  const body = await res.json();
+  assert.equal(body.error, 'Internal server error');
+  assert.ok(!JSON.stringify(body).includes('SECRET'), 'internal detail must not leak to the client');
+  srv.close();
+});

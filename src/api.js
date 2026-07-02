@@ -128,7 +128,9 @@ export function createApi(store, cfg, { logger } = {}) {
       ]);
       return reply(200, { data: rows, count: rows.length, total, limit, offset });
     } catch (e) {
-      reply(500, { error: e.message });
+      // Don't leak internal error details (SQL, paths) to clients; log them instead.
+      logger?.error('request failed', { method: req.method, path: req.url, error: e.message });
+      reply(500, { error: 'Internal server error' });
     } finally {
       logger?.debug('request', { method: req.method, path: req.url, status, ms: Date.now() - started });
     }

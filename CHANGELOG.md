@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Structured JSON logging via `INDEXA_LOG_FORMAT=json` (BigInt-safe), for shipping
+  logs into an aggregator; `setFormat()` is exported alongside `setLevel()`.
+- SQLite pragmas tuned for a live indexer: `busy_timeout=5000` and
+  `synchronous=NORMAL` (durable against app crashes, faster) in addition to WAL.
 - Query filter operators over both the store API and HTTP: `_ne`, `_gt`, `_gte`,
   `_lt`, `_lte`, `_in` (comma list) and `_like`, in addition to equality. ISO-8601
   `Timestamp` ranges sort correctly.
@@ -41,6 +45,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `LIMIT` from becoming an unbounded scan in SQLite.
 
 ### Changed
+- The API now returns a generic `Internal server error` on unexpected `500`s and
+  logs the real error server-side, instead of returning internal messages to clients.
 - Non-`GET` methods on the API return `405`.
 - WHERE-clause construction is centralized in a shared `buildWhere()` used by both
   `query()` and `count()` in each store.
