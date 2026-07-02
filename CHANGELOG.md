@@ -7,6 +7,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Live-tail resilience: a transient error in one stream during `watch()` is logged
+  and retried on the next poll instead of crashing the indexer. The checkpoint only
+  advances with committed writes, so retries never skip or double-write.
+- The CSV connector now picks up appended rows during live tail (re-reads on change,
+  skipping the re-parse when the file's mtime is unchanged).
 - The query API reads through a dedicated connection (`store.openReader()`), so it
   never observes the engine's in-flight write transaction. For SQLite this is a
   second read-only WAL connection with a committed-only snapshot; for Postgres the

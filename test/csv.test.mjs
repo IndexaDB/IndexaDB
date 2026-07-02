@@ -1,7 +1,7 @@
 // test/csv.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, appendFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import CsvConnector from '../src/connectors/csv.js';
@@ -56,4 +56,24 @@ test('ignores trailing blank lines', async () => {
   const dir = csvFixture('id,name\n1,Alice\n\n');
   const { records } = await readAll(dir);
   assert.equal(records.length, 1);
+});
+
+test('picks up appended rows on a later fetch (live tail)', async () => {
+  const dir = csvFixture('id,name\n1,Alice\n');
+  const c = new CsvConnector();
+  await c.init({ sources: [{ key: 'rows', file: 'data.csv' }] }, { logger: createLogger('t'), dir });
+  const [stream] = await c.streams();
+
+  let r = await stream.fetchBatch(null, 100);
+  assert.equal(r.records.length, 1);
+
+  // Append a new row and bump the mtime so the connector re-reads.
+  const path = join(dir, 'data.csv');
+  appendFileSync(path, '2,Bob\n');
+  const future = new Date(Date.now() + 5000);
+  utimesSync(path, future, future);
+
+  r = await stream.fetchBatch(1, 100); // resume after cursor 1
+  assert.equal(r.records.length, 1);
+  assert.deepEqual(r.records[0], { cursor: 2, data: { id: '2', name: 'Bob' } });
 });

@@ -138,8 +138,15 @@ export class Engine {
       await new Promise((r) => setTimeout(r, interval));
       for (const stream of this.streams) {
         if (!this.running) break;
-        let done = false;
-        while (!done && this.running) { const r = await this.pump(stream); done = r.done; }
+        try {
+          let done = false;
+          while (!done && this.running) { const r = await this.pump(stream); done = r.done; }
+        } catch (e) {
+          // A transient failure (RPC hiccup, source blip) must not kill a live
+          // indexer. The checkpoint didn't advance, so the next poll retries from
+          // the same spot; entity writes commit with the checkpoint, so no gaps.
+          this.logger.error('pump failed; retrying next poll', { stream: stream.key, error: e.message });
+        }
       }
     }
   }

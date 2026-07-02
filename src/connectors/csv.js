@@ -1,5 +1,5 @@
 // src/connectors/csv.js
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 // Minimal RFC-4180-ish CSV parser (handles quotes, escaped quotes, commas, newlines).
@@ -37,16 +37,27 @@ export default class CsvConnector {
   async streams() {
     return this.sources.map((s) => {
       const path = resolve(this.dir, s.file);
-      const rows = parseCSV(readFileSync(path, 'utf8'));
-      const header = rows[0];
-      const dataRows = rows.slice(1).map((cells, idx) => {
-        const obj = {};
-        header.forEach((h, i) => { obj[h] = cells[i]; });
-        return { cursor: idx + 1, data: obj }; // 1-based row index as cursor
-      });
+      // Re-read on demand so appended rows are picked up during live tail, but skip
+      // the re-parse when the file is unchanged (append-only cursor = 1-based row).
+      let cache = { mtimeMs: -1, rows: [] };
+      const load = () => {
+        const mtimeMs = statSync(path).mtimeMs;
+        if (mtimeMs !== cache.mtimeMs) {
+          const rows = parseCSV(readFileSync(path, 'utf8'));
+          const header = rows[0] || [];
+          const dataRows = rows.slice(1).map((cells, idx) => {
+            const obj = {};
+            header.forEach((h, i) => { obj[h] = cells[i]; });
+            return { cursor: idx + 1, data: obj };
+          });
+          cache = { mtimeMs, rows: dataRows };
+        }
+        return cache.rows;
+      };
       return {
         key: s.key,
         async fetchBatch(fromCursor, limit) {
+          const dataRows = load();
           const from = fromCursor ? Number(fromCursor) : 0;
           const batch = dataRows.filter((r) => r.cursor > from).slice(0, limit);
           return { records: batch, done: true };

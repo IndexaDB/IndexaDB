@@ -158,6 +158,57 @@ test('watch() live-tails new rows and stop() drains then resolves', async () => 
   await engine.close();
 });
 
+test('watch() survives a transient pump error and retries on the next poll', async () => {
+  let throwOnce = false;
+  const rows = [{ cursor: 1, data: { id: '1', customer: 'Alice', total: '10' } }];
+  class FlakyConnector {
+    async init() {}
+    async streams() {
+      return [{
+        key: 'orders',
+        fetchBatch: async (fromCursor) => {
+          if (throwOnce) { throwOnce = false; throw new Error('transient source blip'); }
+          const from = fromCursor != null ? Number(fromCursor) : 0;
+          const remaining = rows.filter((r) => Number(r.cursor) > from);
+          const batch = remaining.slice(0, 500);
+          return { records: batch, done: batch.length >= remaining.length };
+        },
+      }];
+    }
+    async close() {}
+  }
+  registerConnector('flaky', FlakyConnector);
+
+  const cfg = {
+    __dir: tmpdir(), name: 'eng', batchSize: 500, pollIntervalMs: 5,
+    source: { type: 'flaky' },
+    target: { type: 'sqlite', path: dbPath('flaky') },
+    schema: { Order: { id: 'ID', customer: 'String', total: 'BigDecimal' } },
+  };
+  const engine = new Engine(cfg, logger);
+  await engine.setup();
+  const waitFor = async (fn, ms = 2000) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) { if (await fn()) return; await new Promise((r) => setTimeout(r, 5)); }
+    throw new Error('waitFor timed out');
+  };
+
+  const watching = engine.watch();
+  await waitFor(async () => (await engine.store.query('Order', {})).length === 1);
+
+  // Arrange for the next poll to throw, then deliver a new row.
+  throwOnce = true;
+  rows.push({ cursor: 2, data: { id: '2', customer: 'Bob', total: '20' } });
+
+  // Despite the thrown error, the loop keeps running and eventually indexes row 2.
+  await waitFor(async () => (await engine.store.query('Order', {})).length === 2);
+  assert.equal(engine.running, true, 'engine still watching after the transient error');
+
+  engine.stop();
+  await watching;
+  await engine.close();
+});
+
 test('pump throws when a stream has no handler and no matching entity', async () => {
   const cfg = {
     __dir: tmpdir(), name: 'eng', batchSize: 500, pollIntervalMs: 0,
