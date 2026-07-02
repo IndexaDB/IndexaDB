@@ -3,58 +3,106 @@ import http from 'node:http';
 
 const RESERVED = new Set(['limit', 'offset', 'orderBy', 'desc']);
 
-function send(res, code, body) {
+function send(res, code, body, headers) {
   const json = JSON.stringify(body, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
-  res.writeHead(code, { 'Content-Type': 'application/json' });
+  res.writeHead(code, { 'Content-Type': 'application/json', ...headers });
   res.end(json);
 }
 
 // Build an HTTP server that exposes every schema entity as a queryable REST resource.
-export function createApi(store, cfg) {
+//   createApi(store, cfg, { logger })
+export function createApi(store, cfg, { logger } = {}) {
   const entities = Object.keys(cfg.schema);
+  const startedAt = Date.now();
+
+  // CORS: this is a read-only query API, so a permissive default is convenient
+  // for browsers / dApps. Override via config:
+  //   api.cors: false            -> no CORS headers
+  //   api.cors: true (default)   -> Access-Control-Allow-Origin: *
+  //   api.cors: "https://x.com"  -> that exact origin
+  const corsOpt = cfg.api?.cors ?? true;
+  const corsOrigin = corsOpt === true ? '*' : (corsOpt || null);
+  const cors = corsOrigin ? {
+    'Access-Control-Allow-Origin': corsOrigin,
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary': 'Origin',
+  } : {};
+
+  // Resolve a path segment to an entity, tolerating case and a trailing plural.
+  const resolveEntity = (seg) => {
+    const norm = (s) => s.toLowerCase().replace(/s$/, '');
+    return entities.find((e) => e.toLowerCase() === seg.toLowerCase())
+      || entities.find((e) => norm(e) === norm(seg));
+  };
 
   const server = http.createServer(async (req, res) => {
+    const started = Date.now();
+    let status = 200;
+    const reply = (code, body) => { status = code; send(res, code, body, cors); };
     try {
+      if (req.method === 'OPTIONS') { // CORS preflight
+        status = 204;
+        res.writeHead(204, cors);
+        return res.end();
+      }
+      if (req.method !== 'GET') {
+        return reply(405, { error: `Method ${req.method} not allowed` });
+      }
+
       const url = new URL(req.url, 'http://localhost');
       const parts = url.pathname.split('/').filter(Boolean);
 
       if (parts.length === 0) {
-        return send(res, 200, {
+        return reply(200, {
           app: cfg.name,
           entities,
           endpoints: entities.flatMap((e) => [`GET /${e}`, `GET /${e}/:id`]),
           schema: cfg.schema,
         });
       }
-      if (parts[0] === '_health') return send(res, 200, { ok: true });
-
-      const norm = (s) => s.toLowerCase().replace(/s$/, '');
-      const entity = entities.find((e) => e.toLowerCase() === parts[0].toLowerCase())
-        || entities.find((e) => norm(e) === norm(parts[0]));
-      if (!entity) return send(res, 404, { error: `Unknown entity "${parts[0]}"` });
-
-      if (parts.length === 2) {
-        const row = await store.get(entity, parts[1]);
-        return row ? send(res, 200, row) : send(res, 404, { error: 'Not found' });
+      if (parts[0] === '_health') {
+        try {
+          const checkpoints = await store.allCheckpoints();
+          return reply(200, {
+            ok: true,
+            app: cfg.name,
+            uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+            checkpoints,
+          });
+        } catch (e) {
+          return reply(503, { ok: false, error: e.message });
+        }
       }
 
+      const entity = resolveEntity(parts[0]);
+      if (!entity) return reply(404, { error: `Unknown entity "${parts[0]}"` });
+
+      if (parts.length >= 2) { // GET /<entity>/:id
+        const row = await store.get(entity, decodeURIComponent(parts[1]));
+        return row ? reply(200, row) : reply(404, { error: 'Not found' });
+      }
+
+      // GET /<entity> — filtered list with pagination
       const where = {};
       for (const [k, v] of url.searchParams.entries()) {
         if (!RESERVED.has(k) && k in cfg.schema[entity]) where[k] = v;
       }
       const orderBy = url.searchParams.get('orderBy') || undefined;
       if (orderBy && !(orderBy in cfg.schema[entity])) {
-        return send(res, 400, { error: `Cannot orderBy "${orderBy}": not a field of ${entity}` });
+        return reply(400, { error: `Cannot orderBy "${orderBy}": not a field of ${entity}` });
       }
       const limit = Math.max(0, Math.min(Number(url.searchParams.get('limit')) || 100, 1000));
       const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
-      const rows = await store.query(entity, {
-        where, limit, offset, orderBy,
-        desc: url.searchParams.get('desc') === 'true',
-      });
-      return send(res, 200, { data: rows, count: rows.length, limit, offset });
+      const [rows, total] = await Promise.all([
+        store.query(entity, { where, limit, offset, orderBy, desc: url.searchParams.get('desc') === 'true' }),
+        store.count(entity, where),
+      ]);
+      return reply(200, { data: rows, count: rows.length, total, limit, offset });
     } catch (e) {
-      return send(res, 500, { error: e.message });
+      reply(500, { error: e.message });
+    } finally {
+      logger?.debug('request', { method: req.method, path: req.url, status, ms: Date.now() - started });
     }
   });
 

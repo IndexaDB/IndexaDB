@@ -46,7 +46,7 @@ async function cmdDeploy(args) {
   let server;
   if (!args['no-api']) {
     const port = Number(args.port) || 4000;
-    server = createApi(engine.store, cfg);
+    server = createApi(engine.store, cfg, { logger: logger.child('api') });
     await new Promise((r) => server.listen(port, r));
     logger.info(`query API listening`, { url: `http://localhost:${port}` });
   }

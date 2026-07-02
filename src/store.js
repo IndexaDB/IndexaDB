@@ -18,6 +18,23 @@ function clampInt(v, fallback) {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+// Build a parameterized WHERE clause shared by query() and count(). Every key is
+// validated against the schema (guarding injection) and every value coerced to
+// its declared type before binding. Placeholder syntax differs per dialect.
+function buildWhere(where, fields, entity, dialect, startIndex = 1) {
+  const conds = [];
+  const params = [];
+  let i = startIndex;
+  for (const [k, v] of Object.entries(where)) {
+    assertField(k, fields, entity, 'filter by');
+    const { base, list } = parseType(fields[k]);
+    const ph = dialect === 'postgres' ? `$${i++}` : '?';
+    conds.push(`"${k}" = ${ph}`);
+    params.push(encode(coerceScalar(v, base, list), base, list, dialect));
+  }
+  return { clause: conds.length ? ` WHERE ${conds.join(' AND ')}` : '', params, nextIndex: i };
+}
+
 // Serialize a value for storage based on its declared type.
 function encode(value, base, list, dialect) {
   if (value == null) return null;
@@ -104,21 +121,28 @@ class SqliteStore {
     const fields = this.schema[entity];
     if (!fields) throw new Error(`Unknown entity "${entity}"`);
     assertField(orderBy, fields, entity, 'orderBy');
-    const conds = [];
-    const params = [];
-    for (const [k, v] of Object.entries(where)) {
-      assertField(k, fields, entity, 'filter by');
-      const { base, list } = parseType(fields[k]);
-      conds.push(`"${k}" = ?`);
-      params.push(encode(coerceScalar(v, base, list), base, list, 'sqlite'));
-    }
-    let sql = `SELECT * FROM "${entity}"`;
-    if (conds.length) sql += ` WHERE ${conds.join(' AND ')}`;
+    const { clause, params } = buildWhere(where, fields, entity, 'sqlite');
+    let sql = `SELECT * FROM "${entity}"${clause}`;
     if (orderBy) sql += ` ORDER BY "${orderBy}" ${desc ? 'DESC' : 'ASC'}`;
     sql += ` LIMIT ? OFFSET ?`;
     params.push(clampInt(limit, 100), clampInt(offset, 0));
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => decodeRow(r, fields, 'sqlite'));
+  }
+
+  async count(entity, where = {}) {
+    const fields = this.schema[entity];
+    if (!fields) throw new Error(`Unknown entity "${entity}"`);
+    const { clause, params } = buildWhere(where, fields, entity, 'sqlite');
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM "${entity}"${clause}`).get(...params);
+    return row.n;
+  }
+
+  // All persisted stream checkpoints — used by the API health endpoint to report
+  // indexing progress without the API needing to know about connectors.
+  async allCheckpoints() {
+    return this.db.prepare(
+      'SELECT source, cursor, updated_at FROM _indexa_checkpoints ORDER BY source').all();
   }
 
   async getCheckpoint(source) {
@@ -241,22 +265,28 @@ class PostgresStore {
     const fields = this.schema[entity];
     if (!fields) throw new Error(`Unknown entity "${entity}"`);
     assertField(orderBy, fields, entity, 'orderBy');
-    const conds = [];
-    const params = [];
-    let i = 1;
-    for (const [k, v] of Object.entries(where)) {
-      assertField(k, fields, entity, 'filter by');
-      const { base, list } = parseType(fields[k]);
-      conds.push(`"${k}" = $${i++}`);
-      params.push(encode(coerceScalar(v, base, list), base, list, 'postgres'));
-    }
-    let sql = `SELECT * FROM "${entity}"`;
-    if (conds.length) sql += ` WHERE ${conds.join(' AND ')}`;
+    const { clause, params, nextIndex } = buildWhere(where, fields, entity, 'postgres');
+    let i = nextIndex;
+    let sql = `SELECT * FROM "${entity}"${clause}`;
     if (orderBy) sql += ` ORDER BY "${orderBy}" ${desc ? 'DESC' : 'ASC'}`;
     sql += ` LIMIT $${i++} OFFSET $${i++}`;
     params.push(clampInt(limit, 100), clampInt(offset, 0));
     const { rows } = await this.pool.query(sql, params);
     return rows.map((r) => decodeRow(r, fields, 'postgres'));
+  }
+
+  async count(entity, where = {}) {
+    const fields = this.schema[entity];
+    if (!fields) throw new Error(`Unknown entity "${entity}"`);
+    const { clause, params } = buildWhere(where, fields, entity, 'postgres');
+    const { rows } = await this.pool.query(`SELECT COUNT(*) AS n FROM "${entity}"${clause}`, params);
+    return Number(rows[0].n);
+  }
+
+  async allCheckpoints() {
+    const { rows } = await this.pool.query(
+      'SELECT source, cursor, updated_at FROM _indexa_checkpoints ORDER BY source');
+    return rows;
   }
 
   async getCheckpoint(source) {
