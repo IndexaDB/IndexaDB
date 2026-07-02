@@ -1,11 +1,40 @@
 {
   "name": "indexa",
   "version": "0.1.0",
-  "description": "Declarative database indexer framework — khai báo, không cần tự code engine.",
+  "description": "Declarative database indexer — describe what to index in one YAML file; Indexa handles incremental sync, checkpointing, idempotency, reorg handling, and an auto-generated REST query API.",
   "type": "module",
+  "license": "MIT",
+  "author": "IndexaDB",
+  "homepage": "https://github.com/IndexaDB/indexa#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IndexaDB/indexa.git"
+  },
+  "bugs": {
+    "url": "https://github.com/IndexaDB/indexa/issues"
+  },
+  "keywords": [
+    "indexer",
+    "declarative",
+    "etl",
+    "incremental-sync",
+    "sqlite",
+    "postgres",
+    "evm",
+    "blockchain",
+    "reorg",
+    "rest-api",
+    "checkpoint"
+  ],
   "bin": {
     "indexa": "./bin/indexa.js"
   },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "demo": "node bin/indexa.js deploy --config examples/orders/indexa.config.yaml",
     "test": "node --test",
