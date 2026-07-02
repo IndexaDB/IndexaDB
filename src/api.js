@@ -42,14 +42,17 @@ export function createApi(store, cfg) {
       for (const [k, v] of url.searchParams.entries()) {
         if (!RESERVED.has(k) && k in cfg.schema[entity]) where[k] = v;
       }
+      const orderBy = url.searchParams.get('orderBy') || undefined;
+      if (orderBy && !(orderBy in cfg.schema[entity])) {
+        return send(res, 400, { error: `Cannot orderBy "${orderBy}": not a field of ${entity}` });
+      }
+      const limit = Math.max(0, Math.min(Number(url.searchParams.get('limit')) || 100, 1000));
+      const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
       const rows = await store.query(entity, {
-        where,
-        limit: Math.min(Number(url.searchParams.get('limit')) || 100, 1000),
-        offset: Number(url.searchParams.get('offset')) || 0,
-        orderBy: url.searchParams.get('orderBy') || undefined,
+        where, limit, offset, orderBy,
         desc: url.searchParams.get('desc') === 'true',
       });
-      return send(res, 200, { data: rows, count: rows.length });
+      return send(res, 200, { data: rows, count: rows.length, limit, offset });
     } catch (e) {
       return send(res, 500, { error: e.message });
     }

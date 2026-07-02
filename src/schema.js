@@ -28,6 +28,22 @@ export function sqlColumnType(base, list, dialect) {
   return map[base] || 'TEXT';
 }
 
+// Coerce a raw value (often a string from CSV or a query param) into the JS
+// representation implied by its declared schema type. Shared by the engine's
+// default column->entity mapping and by the store's query filters, so a
+// filter like ?active=true matches a Boolean column and ?items=3 an Int.
+export function coerceScalar(value, base, list) {
+  if (value == null || value === '') return null;
+  if (list && typeof value === 'string') { try { return JSON.parse(value); } catch { return value; } }
+  switch (base) {
+    case 'Int': return Math.trunc(Number(value));
+    case 'Float': return Number(value);
+    case 'Boolean': return value === true || value === 'true' || value === '1' || value === 't';
+    case 'JSON': return typeof value === 'string' ? JSON.parse(value) : value;
+    default: return value; // String/ID/BigInt/BigDecimal/Timestamp/relations stay as-is
+  }
+}
+
 const TS_SCALARS = {
   ID: 'string', String: 'string', Int: 'number', Float: 'number', Boolean: 'boolean',
   BigInt: 'bigint', BigDecimal: 'string', JSON: 'unknown', Timestamp: 'string',

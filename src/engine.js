@@ -1,21 +1,9 @@
 // src/engine.js
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { parseType } from './schema.js';
+import { parseType, coerceScalar } from './schema.js';
 import { loadConnector } from './registry.js';
 import { createStore } from './store.js';
-
-function coerce(value, base, list) {
-  if (value == null || value === '') return null;
-  if (list && typeof value === 'string') { try { return JSON.parse(value); } catch { return value; } }
-  switch (base) {
-    case 'Int': return Math.trunc(Number(value));
-    case 'Float': return Number(value);
-    case 'Boolean': return value === true || value === 'true' || value === '1' || value === 't';
-    case 'JSON': return typeof value === 'string' ? JSON.parse(value) : value;
-    default: return value; // String/ID/BigInt/BigDecimal/Timestamp/relations stay as-is
-  }
-}
 
 // When no handler is defined for a stream, map raw columns straight into the
 // matching entity, coercing each field to its declared schema type.
@@ -31,7 +19,7 @@ function defaultMapping(streamKey, schema, sourceMap) {
     for (const [field, type] of Object.entries(fields)) {
       if (field in record) {
         const { base, list } = parseType(type);
-        data[field] = coerce(record[field], base, list);
+        data[field] = coerceScalar(record[field], base, list);
       }
     }
     if (data.id == null) throw new Error(`Record for "${entity}" is missing an "id" field`);

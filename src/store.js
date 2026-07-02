@@ -1,5 +1,22 @@
 // src/store.js
-import { parseType, sqlColumnType } from './schema.js';
+import { parseType, sqlColumnType, coerceScalar } from './schema.js';
+
+// orderBy is interpolated straight into SQL as an identifier, so it must never
+// come from unvalidated input. Only a real field of the entity is allowed —
+// this is the guard against SQL injection via ?orderBy=.
+function assertField(name, fields, entity, kind) {
+  if (name != null && !(name in fields)) {
+    throw new Error(`Cannot ${kind} "${name}": not a field of ${entity}`);
+  }
+}
+
+// LIMIT/OFFSET reach SQL as bound params, but a negative LIMIT means "unbounded"
+// in SQLite, so an unclamped value is a resource footgun. Fall back to defaults
+// for NaN/negative input.
+function clampInt(v, fallback) {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
 
 // Serialize a value for storage based on its declared type.
 function encode(value, base, list, dialect) {
@@ -84,19 +101,24 @@ class SqliteStore {
   }
 
   async query(entity, { where = {}, orderBy, desc, limit = 100, offset = 0 } = {}) {
+    const fields = this.schema[entity];
+    if (!fields) throw new Error(`Unknown entity "${entity}"`);
+    assertField(orderBy, fields, entity, 'orderBy');
     const conds = [];
     const params = [];
     for (const [k, v] of Object.entries(where)) {
+      assertField(k, fields, entity, 'filter by');
+      const { base, list } = parseType(fields[k]);
       conds.push(`"${k}" = ?`);
-      params.push(v);
+      params.push(encode(coerceScalar(v, base, list), base, list, 'sqlite'));
     }
     let sql = `SELECT * FROM "${entity}"`;
     if (conds.length) sql += ` WHERE ${conds.join(' AND ')}`;
     if (orderBy) sql += ` ORDER BY "${orderBy}" ${desc ? 'DESC' : 'ASC'}`;
     sql += ` LIMIT ? OFFSET ?`;
-    params.push(Number(limit), Number(offset));
+    params.push(clampInt(limit, 100), clampInt(offset, 0));
     const rows = this.db.prepare(sql).all(...params);
-    return rows.map((r) => decodeRow(r, this.schema[entity], 'sqlite'));
+    return rows.map((r) => decodeRow(r, fields, 'sqlite'));
   }
 
   async getCheckpoint(source) {
@@ -216,17 +238,25 @@ class PostgresStore {
   }
 
   async query(entity, { where = {}, orderBy, desc, limit = 100, offset = 0 } = {}) {
+    const fields = this.schema[entity];
+    if (!fields) throw new Error(`Unknown entity "${entity}"`);
+    assertField(orderBy, fields, entity, 'orderBy');
     const conds = [];
     const params = [];
     let i = 1;
-    for (const [k, v] of Object.entries(where)) { conds.push(`"${k}" = $${i++}`); params.push(v); }
+    for (const [k, v] of Object.entries(where)) {
+      assertField(k, fields, entity, 'filter by');
+      const { base, list } = parseType(fields[k]);
+      conds.push(`"${k}" = $${i++}`);
+      params.push(encode(coerceScalar(v, base, list), base, list, 'postgres'));
+    }
     let sql = `SELECT * FROM "${entity}"`;
     if (conds.length) sql += ` WHERE ${conds.join(' AND ')}`;
     if (orderBy) sql += ` ORDER BY "${orderBy}" ${desc ? 'DESC' : 'ASC'}`;
     sql += ` LIMIT $${i++} OFFSET $${i++}`;
-    params.push(Number(limit), Number(offset));
+    params.push(clampInt(limit, 100), clampInt(offset, 0));
     const { rows } = await this.pool.query(sql, params);
-    return rows.map((r) => decodeRow(r, this.schema[entity], 'postgres'));
+    return rows.map((r) => decodeRow(r, fields, 'postgres'));
   }
 
   async getCheckpoint(source) {
