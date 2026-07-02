@@ -8,7 +8,9 @@
   },
   "scripts": {
     "demo": "node bin/indexa.js deploy --config examples/orders/indexa.config.yaml",
-    "test": "node test/reorg.test.mjs"
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "test:reorg": "node --test test/reorg.test.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
