@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- The query API reads through a dedicated connection (`store.openReader()`), so it
+  never observes the engine's in-flight write transaction. For SQLite this is a
+  second read-only WAL connection with a committed-only snapshot; for Postgres the
+  pool already isolates reads from the transaction client.
 - Structured JSON logging via `INDEXA_LOG_FORMAT=json` (BigInt-safe), for shipping
   logs into an aggregator; `setFormat()` is exported alongside `setLevel()`.
 - SQLite pragmas tuned for a live indexer: `busy_timeout=5000` and

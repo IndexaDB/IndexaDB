@@ -91,10 +91,17 @@ function decodeRow(row, fields, dialect) {
 class SqliteStore {
   constructor(cfg) { this.cfg = cfg; this.dialect = 'sqlite'; }
 
-  async init(schema) {
+  async init(schema, { readOnly = false } = {}) {
     const { DatabaseSync } = await import('node:sqlite');
     this.schema = schema;
-    this.db = new DatabaseSync(this.cfg.path || './indexa.db');
+    this.db = new DatabaseSync(this.cfg.path || './indexa.db', { readOnly });
+    if (readOnly) {
+      // A reader shares the schema for decoding; tables/pragmas are the writer's job.
+      // In WAL mode this connection sees a committed-only snapshot, never the
+      // writer's in-flight transaction.
+      this.db.exec('PRAGMA busy_timeout = 5000;');
+      return;
+    }
     this.db.exec('PRAGMA journal_mode = WAL;');   // concurrent readers alongside the writer
     this.db.exec('PRAGMA busy_timeout = 5000;');  // wait on a locked db instead of erroring immediately
     // NORMAL is durable against app crashes and safe here because entity writes and
@@ -228,6 +235,15 @@ class SqliteStore {
     this.db.exec('BEGIN');
     try { const r = await fn(); this.db.exec('COMMIT'); return r; }
     catch (e) { this.db.exec('ROLLBACK'); throw e; }
+  }
+
+  // A separate read-only connection for the query API, so reads never observe the
+  // engine's in-flight write transaction. Must be opened after init() (the file
+  // and tables have to exist). Close it independently of the writer.
+  async openReader() {
+    const reader = new SqliteStore(this.cfg);
+    await reader.init(this.schema, { readOnly: true });
+    return reader;
   }
 
   async close() { this.db?.close(); }
@@ -377,6 +393,10 @@ class PostgresStore {
     catch (e) { await client.query('ROLLBACK'); throw e; }
     finally { this._tx = null; client.release(); }
   }
+
+  // Reads already go through the pool (a different connection than the transaction
+  // client), so they never see uncommitted writes — the store is its own reader.
+  async openReader() { return this; }
 
   async close() { await this.pool?.end(); }
 }

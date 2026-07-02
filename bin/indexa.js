@@ -44,10 +44,13 @@ async function cmdDeploy(args) {
   const engine = new Engine(cfg, logger);
   await engine.setup();
 
-  let server;
+  let server, reader;
   if (!args['no-api']) {
     const port = Number(args.port) || 4000;
-    server = createApi(engine.store, cfg, { logger: logger.child('api') });
+    // Serve reads from a dedicated connection so the API never observes the
+    // engine's in-flight writes (for Postgres this is the store itself).
+    reader = await engine.store.openReader();
+    server = createApi(reader, cfg, { logger: logger.child('api') });
     await new Promise((r) => server.listen(port, r));
     logger.info(`query API listening`, { url: `http://localhost:${port}` });
   }
@@ -61,6 +64,7 @@ async function cmdDeploy(args) {
     engine.stop();
     if (watching) await watching.catch(() => {}); // let the in-flight pump finish and the loop exit
     if (server) await new Promise((r) => server.close(r));
+    if (reader && reader !== engine.store) await reader.close();
     await engine.close();
     process.exit(0);
   };

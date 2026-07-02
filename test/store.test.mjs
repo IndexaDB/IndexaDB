@@ -108,6 +108,30 @@ test('kv get/set/deletePrefix', async () => {
   assert.equal(await store.kvGet('evm:x:hash:1'), null);
 });
 
+test('openReader sees committed data but not the writer\'s open transaction', async () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'ix-reader-')), 'r.db');
+  const w = createStore({ type: 'sqlite', path: dbPath });
+  await w.init({ Item: { id: 'ID', v: 'Int' } });
+  await w.upsert('Item', '1', { id: '1', v: 1 });
+
+  const reader = await w.openReader();
+  assert.equal((await reader.get('Item', '1')).v, 1, 'reader sees the initial committed row');
+
+  let midTxnView;
+  await w.transaction(async () => {
+    await w.upsert('Item', '1', { id: '1', v: 999 }); // uncommitted
+    midTxnView = (await reader.get('Item', '1')).v;   // reader must still see 1
+  });
+  assert.equal(midTxnView, 1, 'reader did not observe the uncommitted write');
+  assert.equal((await reader.get('Item', '1')).v, 999, 'reader sees the value after commit');
+
+  await reader.close();
+  // reader.close() must not close the writer
+  await w.upsert('Item', '2', { id: '2', v: 2 });
+  assert.equal((await w.get('Item', '2')).v, 2);
+  await w.close();
+});
+
 test('journal rollback undoes inserts and restores prior values', async () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'ix-journal-')), 'j.db');
   const s = createStore({ type: 'sqlite', path: dbPath });
