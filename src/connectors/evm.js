@@ -96,11 +96,17 @@ export default class EvmConnector {
     }
 
     const last = fromCursor != null ? Number(fromCursor) : ev.startBlock - 1;
+    const hashes = await this._loadHashes(name);
 
     // --- reorg detection: has our tip block's hash changed? ---
     if (last >= ev.startBlock) {
-      const reorg = await this._detectReorg(name, ev, last);
+      const reorg = await this._detectReorg(name, ev, last, hashes);
       if (reorg != null) {
+        // Drop the recorded hashes for the orphaned blocks we're rolling back past,
+        // so the map never keeps a hash that disagrees with the canonical chain.
+        let changed = false;
+        for (const h of hashes.keys()) if (h > reorg) { hashes.delete(h); changed = true; }
+        if (changed) await this._saveHashes(name, hashes);
         return { records: [], done: false, reorg: { toCursor: reorg } };
       }
     }
@@ -108,7 +114,7 @@ export default class EvmConnector {
     // --- forward scan ---
     const from = last + 1;
     if (from > safeHead) {
-      await this._pruneHashes(name, finalizedBelow);
+      if (this._pruneHashes(hashes, finalizedBelow)) await this._saveHashes(name, hashes);
       return { records: [], done: true, finalizedBelow, advanceTo: safeHead };
     }
     const to = Math.min(from + this.blockBatchSize - 1, safeHead);
@@ -120,8 +126,8 @@ export default class EvmConnector {
     }]);
 
     const records = [];
-    const hashesNearTip = {};
     const nearTipFloor = safeHead - this.reorgWindow;
+    let dirty = false;
 
     for (const log of logs) {
       const address = log.address.toLowerCase();
@@ -146,23 +152,19 @@ export default class EvmConnector {
           args: plainArgs(c.fragment, parsed),
         },
       });
-      if (blockNumber >= nearTipFloor) hashesNearTip[blockNumber] = log.blockHash;
+      if (blockNumber >= nearTipFloor) { hashes.set(blockNumber, log.blockHash); dirty = true; }
     }
     records.sort((a, b) => a._sort - b._sort);
     records.forEach((r) => delete r._sort);
 
     // Record the tip block hash (always) so future reorgs are detectable, plus
     // any near-tip block hashes we learned from logs.
-    if (to >= nearTipFloor) {
-      if (hashesNearTip[to] == null) {
-        const block = await this.transport('eth_getBlockByNumber', [toHex(to), false]);
-        if (block?.hash) hashesNearTip[to] = block.hash;
-      }
-      for (const [h, hash] of Object.entries(hashesNearTip)) {
-        await this.kv.set(`evm:${name}:hash:${h}`, hash);
-      }
+    if (to >= nearTipFloor && !hashes.has(to)) {
+      const block = await this.transport('eth_getBlockByNumber', [toHex(to), false]);
+      if (block?.hash) { hashes.set(to, block.hash); dirty = true; }
     }
-    await this._pruneHashes(name, finalizedBelow);
+    if (this._pruneHashes(hashes, finalizedBelow)) dirty = true;
+    if (dirty) await this._saveHashes(name, hashes);
 
     return {
       records,
@@ -173,28 +175,41 @@ export default class EvmConnector {
   }
 
   // Returns the safe rollback block if a reorg is found, else null.
-  async _detectReorg(name, ev, last) {
-    const stored = await this.kv.get(`evm:${name}:hash:${last}`);
-    if (!stored) return null; // no recorded hash (deep backfill) -> assumed final
+  async _detectReorg(name, ev, last, hashes) {
+    const stored = hashes.get(last);
+    if (stored == null) return null; // no recorded hash (deep backfill) -> assumed final
     const canonical = await this.transport('eth_getBlockByNumber', [toHex(last), false]);
     if (canonical && canonical.hash === stored) return null; // tip intact, no reorg
 
     this.logger.warn('tip hash mismatch — searching common ancestor', { stream: name, block: last });
-    // Walk back over recorded hashes to find the deepest still-canonical block.
-    for (let h = last - 1; h >= ev.startBlock; h--) {
-      const sh = await this.kv.get(`evm:${name}:hash:${h}`);
-      if (!sh) continue; // not recorded; keep walking
+    // Walk back over recorded hashes (deepest-first) to find the last canonical block.
+    const recorded = [...hashes.keys()].filter((h) => h < last && h >= ev.startBlock).sort((a, b) => b - a);
+    for (const h of recorded) {
       const cb = await this.transport('eth_getBlockByNumber', [toHex(h), false]);
-      if (cb && cb.hash === sh) return h; // common ancestor found
+      if (cb && cb.hash === hashes.get(h)) return h; // common ancestor found
     }
     return ev.startBlock - 1; // nothing matches -> re-index whole window
   }
 
-  async _pruneHashes(name, belowBlock) {
-    // Best-effort prune of finalized hashes (kv has no range delete; prefix-scan is fine here).
-    // We delete by prefix only on shutdown/large windows; for steady state we rely on the small window.
-    if (belowBlock <= 0) return;
-    // No-op for the prefix store granularity; finalized hashes are harmless and bounded by window churn.
+  // Block-hash bookkeeping. The whole reorg window is kept in a single kv value
+  // per event ({ block: hash }); pruning finalized entries keeps it bounded to
+  // ~reorgWindow instead of leaking one row per indexed block.
+  async _loadHashes(name) {
+    const raw = await this.kv.get(`evm:${name}:hashes`);
+    if (!raw) return new Map();
+    return new Map(Object.entries(JSON.parse(raw)).map(([k, v]) => [Number(k), v]));
+  }
+
+  async _saveHashes(name, hashes) {
+    const obj = {};
+    for (const [k, v] of hashes) obj[k] = v;
+    await this.kv.set(`evm:${name}:hashes`, JSON.stringify(obj));
+  }
+
+  _pruneHashes(hashes, belowBlock) {
+    let changed = false;
+    for (const h of hashes.keys()) if (h <= belowBlock) { hashes.delete(h); changed = true; }
+    return changed;
   }
 
   async close() {}
