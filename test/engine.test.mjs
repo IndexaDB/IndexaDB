@@ -123,6 +123,41 @@ test('handler performs read-modify-write aggregation exactly once per row', asyn
   await engine.close();
 });
 
+test('watch() live-tails new rows and stop() drains then resolves', async () => {
+  const rows = [{ cursor: 1, data: { id: '1', customer: 'Alice', total: '10' } }];
+  const cfg = {
+    __dir: tmpdir(), name: 'eng', batchSize: 500, pollIntervalMs: 5,
+    source: { type: 'mock', data: { orders: rows } },
+    target: { type: 'sqlite', path: dbPath('watch') },
+    schema: { Order: { id: 'ID', customer: 'String', total: 'BigDecimal' } },
+  };
+  const engine = new Engine(cfg, logger);
+  await engine.setup();
+
+  const waitFor = async (fn, ms = 2000) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (await fn()) return;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error('waitFor timed out');
+  };
+
+  const watching = engine.watch(); // backfill + poll loop
+  await waitFor(async () => (await engine.store.query('Order', {})).length === 1);
+
+  // New row arrives while watching -> live tail must pick it up.
+  rows.push({ cursor: 2, data: { id: '2', customer: 'Bob', total: '20' } });
+  await waitFor(async () => (await engine.store.query('Order', {})).length === 2);
+
+  engine.stop();
+  await watching; // must resolve after the current pump finishes
+
+  assert.equal((await engine.store.query('Order', {})).length, 2);
+  assert.equal(await engine.store.getCheckpoint('orders'), '2');
+  await engine.close();
+});
+
 test('pump throws when a stream has no handler and no matching entity', async () => {
   const cfg = {
     __dir: tmpdir(), name: 'eng', batchSize: 500, pollIntervalMs: 0,

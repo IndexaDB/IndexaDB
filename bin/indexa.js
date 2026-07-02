@@ -51,22 +51,28 @@ async function cmdDeploy(args) {
     logger.info(`query API listening`, { url: `http://localhost:${port}` });
   }
 
-  const shutdown = async () => {
-    logger.info('shutting down...');
+  let shuttingDown = false;
+  let watching = null;
+  const shutdown = async (signal) => {
+    if (shuttingDown) return; // ignore repeated signals
+    shuttingDown = true;
+    logger.info('shutting down...', signal ? { signal } : undefined);
     engine.stop();
-    server?.close();
+    if (watching) await watching.catch(() => {}); // let the in-flight pump finish and the loop exit
+    if (server) await new Promise((r) => server.close(r));
     await engine.close();
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   if (args.once) {
     await engine.backfill();
     logger.info('backfill complete (--once), exiting');
-    if (!args['no-api']) logger.info('API still up; Ctrl+C to exit'); else await shutdown();
+    if (server) logger.info('API still up; Ctrl+C to exit'); else await shutdown();
   } else {
-    await engine.watch();
+    watching = engine.watch();
+    await watching;
   }
 }
 
