@@ -23,6 +23,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   metadata (`license`, `author`, `repository`, `keywords`, `files`).
 
 ### Fixed
+- **EVM reorg-hash leak:** block hashes for the reorg window are stored in a
+  single, self-pruning kv value per event instead of one kv row per block, so a
+  long-running EVM indexer no longer grows `_indexa_meta` without bound.
+- Graceful shutdown (`SIGINT`/`SIGTERM`) now drains the in-flight pump and awaits
+  `server.close()` before closing the store, so a container stop can't interrupt
+  a transaction. Repeated signals are ignored.
+- `indexa validate` now catches source-specific mistakes up front (missing csv
+  `file`, postgres `tables`, evm `contracts`/`abi`) and non-positive `batchSize`
+  / negative `pollIntervalMs`, instead of failing later at connector init.
 - **Security:** `orderBy` (and any filter column) is now validated against the
   entity schema before being interpolated into SQL, closing a SQL-injection vector
   via the `?orderBy=` query param. Invalid columns return `400` instead of `500`.

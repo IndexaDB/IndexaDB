@@ -31,7 +31,7 @@ schema:
 
 test('loadConfig defaults target to sqlite when omitted', () => {
   const file = writeConfig(`
-source: { type: csv, sources: [] }
+source: { type: csv, sources: [{ key: orders, file: data/orders.csv }] }
 schema:
   Order: { id: ID }
 `);
@@ -60,7 +60,7 @@ schema:
 
 test('loadConfig accepts entity relations as types', () => {
   const file = writeConfig(`
-source: { type: csv }
+source: { type: csv, sources: [{ key: orders, file: data/orders.csv }] }
 schema:
   Customer: { id: ID, name: String }
   Order: { id: ID, customer: Customer }
@@ -72,7 +72,7 @@ schema:
 test('loadConfig interpolates env vars with defaults', () => {
   process.env.IX_TEST_DB = 'postgres://x';
   const file = writeConfig(`
-source: { type: postgres, connection: "\${IX_TEST_DB}" }
+source: { type: postgres, connection: "\${IX_TEST_DB}", tables: [{ table: orders }] }
 target: { type: postgres, connection: "\${IX_MISSING:-postgres://fallback}" }
 schema:
   Order: { id: ID }
@@ -90,4 +90,61 @@ schema:
   Order: { id: ID }
 `);
   assert.throws(() => loadConfig(file), /Missing required env var/);
+});
+
+test('csv source without sources/file is rejected', () => {
+  const file = writeConfig(`
+source: { type: csv }
+schema:
+  Order: { id: ID }
+`);
+  assert.throws(() => loadConfig(file), /csv source needs/);
+});
+
+test('postgres source without tables is rejected', () => {
+  const file = writeConfig(`
+source: { type: postgres, connection: "postgres://x" }
+schema:
+  Order: { id: ID }
+`);
+  assert.throws(() => loadConfig(file), /postgres source needs .tables/);
+});
+
+test('evm source without contracts is rejected', () => {
+  const file = writeConfig(`
+source: { type: evm, rpc: "http://localhost:8545" }
+schema:
+  Transfer: { id: ID }
+`);
+  assert.throws(() => loadConfig(file), /evm source needs .contracts/);
+});
+
+test('evm contract missing an abi is rejected', () => {
+  const file = writeConfig(`
+source: { type: evm, rpc: "http://x", contracts: [{ address: "0xabc" }] }
+schema:
+  Transfer: { id: ID }
+`);
+  assert.throws(() => loadConfig(file), /needs an `abi`/);
+});
+
+test('non-positive batchSize is rejected', () => {
+  const file = writeConfig(`
+source: { type: csv, sources: [{ key: o, file: o.csv }] }
+batchSize: -5
+schema:
+  Order: { id: ID }
+`);
+  assert.throws(() => loadConfig(file), /batchSize` must be a positive integer/);
+});
+
+test('unknown source types skip source-specific validation (custom connectors)', () => {
+  const file = writeConfig(`
+source: { type: kafka, brokers: ["a:9092"] }
+schema:
+  Order: { id: ID }
+`);
+  // No throw: a custom connector validates itself in init().
+  const cfg = loadConfig(file);
+  assert.equal(cfg.source.type, 'kafka');
 });

@@ -49,6 +49,36 @@ function validate(cfg, file) {
     }
   }
 
+  // Numeric run options (validated before defaults are applied in loadConfig).
+  if (cfg.batchSize != null && (!Number.isInteger(cfg.batchSize) || cfg.batchSize <= 0)) {
+    errs.push('`batchSize` must be a positive integer');
+  }
+  if (cfg.pollIntervalMs != null && (typeof cfg.pollIntervalMs !== 'number' || cfg.pollIntervalMs < 0)) {
+    errs.push('`pollIntervalMs` must be a non-negative number');
+  }
+
+  // Source-specific checks for built-in connectors. Custom source types validate
+  // themselves in their own init(), so we only inspect the ones we ship.
+  const s = cfg.source;
+  if (s && s.type === 'csv') {
+    const list = Array.isArray(s.sources) ? s.sources : [];
+    if (list.length === 0 && !s.file) {
+      errs.push('csv source needs `sources: [{ key, file }]` (or a single `file`)');
+    }
+    for (const src of list) if (!src || !src.file) errs.push('each csv source needs a `file`');
+  } else if (s && s.type === 'postgres') {
+    if (!s.connection) errs.push('postgres source needs a `connection` string');
+    if (!Array.isArray(s.tables) || s.tables.length === 0) errs.push('postgres source needs `tables: [...]`');
+  } else if (s && s.type === 'evm') {
+    if (!s.rpc && !s.transport) errs.push('evm source needs an `rpc` URL');
+    const contracts = Array.isArray(s.contracts) ? s.contracts : [];
+    if (contracts.length === 0) errs.push('evm source needs `contracts: [...]`');
+    for (const c of contracts) {
+      if (!c || !c.address) errs.push('each evm contract needs an `address`');
+      else if (!c.abi) errs.push(`evm contract ${c.address} needs an \`abi\``);
+    }
+  }
+
   if (errs.length) {
     throw new Error(`Invalid config (${file}):\n  - ${errs.join('\n  - ')}`);
   }
